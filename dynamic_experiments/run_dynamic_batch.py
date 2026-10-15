@@ -3,172 +3,166 @@
 Each evaluated frame gets its own ROI. The original ALINA pipeline is unchanged.
 """
 from __future__ import annotations
-
 import argparse
 import csv
 import json
 import random
 import time
 from pathlib import Path
-
 import cv2
 import numpy as np
-
 from alina.config import PipelineConfig
 from alina.pipeline import process_image
 from alina.roi import compute_display_scale
 from roi_methods import METHODS, select_roi
+FIELDS = ['video', 'frame', 'method', 'status', 'roi_ms', 'alina_ms', 'total_ms', 'detected_pixels', 'had_lines', 'cache_hit', 'error']
 
-FIELDS = ["video", "frame", "method", "status", "roi_ms", "alina_ms",
-          "total_ms", "detected_pixels", "had_lines", "cache_hit", "error"]
-
-
+# Repeat the two upper corners to match ALINA’s six-point input format.
 def alina_roi(quad):
-    bl, tl, tr, br = np.asarray(quad, dtype=np.int32)
-    return np.array([bl, tl, tl, tr, tr, br], dtype=np.int32).reshape(1, 6, 2)
+    bottom_left, top_left, top_right, bottom_right = np.asarray(quad, dtype=np.int32)
+    return np.array([bottom_left, top_left, top_left, top_right, top_right, bottom_right], dtype=np.int32).reshape(1, 6, 2)
 
-
+# Load completed runs so restarting the batch does not repeat finished frames.
 def read_rows(path):
     if not path.exists():
         return {}
-    with path.open(newline="", encoding="utf-8") as f:
-        return {(r["video"], r["frame"], r["method"]): r for r in csv.DictReader(f)}
+    with path.open(newline='', encoding='utf-8') as results_file:
+        return {(record['video'], record['frame'], record['method']): record for record in csv.DictReader(results_file)}
 
-
+# Write the results through a temporary file to avoid losing progress.
 def save_rows(path, rows):
-    tmp = path.with_suffix(".tmp")
-    with tmp.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=FIELDS)
+    temporary_path = path.with_suffix('.tmp')
+    with temporary_path.open('w', newline='', encoding='utf-8') as results_file:
+        writer = csv.DictWriter(results_file, fieldnames=FIELDS)
         writer.writeheader()
-        writer.writerows(rows[k] for k in sorted(rows))
-    tmp.replace(path)
+        writer.writerows((rows[record_key] for record_key in sorted(rows)))
+    temporary_path.replace(path)
 
-
+# Choose evenly spaced frames for the smaller Gemini sample.
 def frame_subset(paths, count):
-    # Evenly spaced indices including the first and last frames; no duplicates.
     if count >= len(paths):
         return paths
-    indices = np.linspace(0, len(paths) - 1, count, dtype=int)
-    return [paths[i] for i in indices]
+    selected_indices = np.linspace(0, len(paths) - 1, count, dtype=int)
+    return [paths[frame_index] for frame_index in selected_indices]
 
-
+# Read the command-line options and set up the experiment folders.
 def main():
-    parser = argparse.ArgumentParser(description="Evaluate dynamic per-frame ROI selection")
-    parser.add_argument("--data-dir", default="data/Raw_Data")
-    parser.add_argument("--output-dir", default="outputs/dynamic_experiments")
-    parser.add_argument("--methods", nargs="+", choices=METHODS, default=list(METHODS))
-    parser.add_argument("--gemini-per-video", type=int, default=10)
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--gemini-model", default="gemini-flash-lite-latest")
-    parser.add_argument("--max-selection-dim", type=int, default=1080)
-    parser.add_argument("--retry-failed", action="store_true")
-    args = parser.parse_args()
+    argument_parser = argparse.ArgumentParser(description='Evaluate dynamic per-frame ROI selection')
+    argument_parser.add_argument('--data-dir', default='data/Raw_Data')
+    argument_parser.add_argument('--output-dir', default='outputs/dynamic_experiments')
+    argument_parser.add_argument('--methods', nargs='+', choices=METHODS, default=list(METHODS))
+    argument_parser.add_argument('--gemini-per-video', type=int, default=10)
+    argument_parser.add_argument('--seed', type=int, default=42)
+    argument_parser.add_argument('--gemini-model', default='gemini-flash-lite-latest')
+    argument_parser.add_argument('--max-selection-dim', type=int, default=1080)
+    argument_parser.add_argument('--retry-failed', action='store_true')
+    options = argument_parser.parse_args()
+    if options.gemini_per_video < 1 or options.max_selection_dim < 1:
+        argument_parser.error('gemini-per-video and max-selection-dim must be positive')
 
-    if args.gemini_per_video < 1 or args.max_selection_dim < 1:
-        parser.error("gemini-per-video and max-selection-dim must be positive")
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    cv2.setRNGSeed(args.seed)
+    # Use the same random seed for all traditional methods.
+    random.seed(options.seed)
+    np.random.seed(options.seed)
+    cv2.setRNGSeed(options.seed)
+    data_folder, output_folder = (Path(options.data_dir), Path(options.output_dir))
 
-    data_dir, out = Path(args.data_dir), Path(args.output_dir)
-    videos = sorted(p for p in data_dir.iterdir() if p.is_dir() and list(p.glob("*.jpg"))) if data_dir.exists() else []
-    if not videos:
-        parser.error(f"No video folders containing JPG images under {data_dir}")
-    out.mkdir(parents=True, exist_ok=True)
-    csv_path = out / "results.csv"
-    rows = read_rows(csv_path)
-    manifest = {"seed": args.seed, "gemini_model": args.gemini_model,
-                "max_selection_dim": args.max_selection_dim,
-                "gemini_per_video": args.gemini_per_video,
-                "methods": list(args.methods),
-                "videos": {p.name: len(list(p.glob('*.jpg'))) for p in videos}}
-    manifest_path = out / "experiment_config.json"
-    if manifest_path.exists():
-        old = json.loads(manifest_path.read_text(encoding="utf-8"))
-        for k in ("seed", "gemini_model", "max_selection_dim", "gemini_per_video"):
-            if old.get(k) != manifest[k]:
-                parser.error(f"Existing results use a different {k}; choose another --output-dir")
+    # Find the image folders included in the experiment.
+    video_folders = sorted((folder for folder in data_folder.iterdir() if folder.is_dir() and list(folder.glob('*.jpg')))) if data_folder.exists() else []
+    if not video_folders:
+        argument_parser.error(f'No video folders containing JPG images under {data_folder}')
+    output_folder.mkdir(parents=True, exist_ok=True)
+    results_csv = output_folder / 'results.csv'
+    saved_results = read_rows(results_csv)
+
+    # Record the settings used for this set of results.
+    run_settings = {'seed': options.seed, 'gemini_model': options.gemini_model, 'max_selection_dim': options.max_selection_dim, 'gemini_per_video': options.gemini_per_video, 'methods': list(options.methods), 'videos': {folder.name: len(list(folder.glob('*.jpg'))) for folder in video_folders}}
+    settings_file = output_folder / 'experiment_config.json'
+    if settings_file.exists():
+        previous_settings = json.loads(settings_file.read_text(encoding='utf-8'))
+        for setting_name in ('seed', 'gemini_model', 'max_selection_dim', 'gemini_per_video'):
+            if previous_settings.get(setting_name) != run_settings[setting_name]:
+                argument_parser.error(f'Existing results use a different {setting_name}; choose another --output-dir')
     else:
-        manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        settings_file.write_text(json.dumps(run_settings, indent=2), encoding='utf-8')
 
-    for video in videos:
-        paths = sorted(video.glob("*.jpg"))
-        gemini_paths = set(frame_subset(paths, args.gemini_per_video))
-        print(f"\n{video.name}: {len(paths)} frames, {len(gemini_paths)} Gemini samples", flush=True)
-        for path in paths:
-            selected_methods = [m for m in args.methods if m != "gemini" or path in gemini_paths]
-            if not selected_methods:
+    # Go through the videos and generate a fresh ROI for each frame.
+    for video_folder in video_folders:
+        image_paths = sorted(video_folder.glob('*.jpg'))
+        gemini_frames = set(frame_subset(image_paths, options.gemini_per_video))
+        print(f'\n{video_folder.name}: {len(image_paths)} frames, {len(gemini_frames)} Gemini samples', flush=True)
+        for image_path in image_paths:
+            methods_for_frame = [method_name for method_name in options.methods if method_name != 'gemini' or image_path in gemini_frames]
+            if not methods_for_frame:
                 continue
-            if all((video.name, path.name, m) in rows and
-                   (rows[(video.name, path.name, m)]["status"] == "ok" or not args.retry_failed)
-                   for m in selected_methods):
+
+            # Skip frames whose requested methods have already finished.
+            if all(((video_folder.name, image_path.name, method_name) in saved_results and (saved_results[video_folder.name, image_path.name, method_name]['status'] == 'ok' or not options.retry_failed) for method_name in methods_for_frame)):
                 continue
-            img = cv2.imread(str(path))
-            if img is None:
-                print(f"WARNING: Cannot read {path}", flush=True)
+            original_image = cv2.imread(str(image_path))
+            if original_image is None:
+                print(f'WARNING: Cannot read {image_path}', flush=True)
                 continue
-            scale = compute_display_scale(img, max_display_dim=args.max_selection_dim)
-            selection = cv2.resize(img, None, fx=scale, fy=scale) if scale != 1.0 else img.copy()
-            sh, sw = selection.shape[:2]
-            config = PipelineConfig(input_dir=video, output_images_dir=out, output_coords_dir=out)
-            for method in selected_methods:
-                key = (video.name, path.name, method)
-                if key in rows and (rows[key]["status"] == "ok" or not args.retry_failed):
+
+            # Resize only for ROI selection; ALINA still receives the original image.
+            display_scale = compute_display_scale(original_image, max_display_dim=options.max_selection_dim)
+            selection_image = cv2.resize(original_image, None, fx=display_scale, fy=display_scale) if display_scale != 1.0 else original_image.copy()
+            selection_height, selection_width = selection_image.shape[:2]
+            pipeline_config = PipelineConfig(input_dir=video_folder, output_images_dir=output_folder, output_coords_dir=output_folder)
+
+            # Save the result after each method so interrupted runs can continue.
+            for method_name in methods_for_frame:
+                result_key = (video_folder.name, image_path.name, method_name)
+                if result_key in saved_results and (saved_results[result_key]['status'] == 'ok' or not options.retry_failed):
                     continue
-                folder = out / video.name / method
-                folder.mkdir(parents=True, exist_ok=True)
-                cache = folder / f"{path.stem}_gemini_{sw}x{sh}_{args.gemini_model}.json"
-                actual_cache = cache.with_name(cache.stem + "_bbox1000_v1" + cache.suffix)
-                timing_file = folder / f"{path.stem}_gemini_inference_ms.json"
-                cache_hit = method == "gemini" and actual_cache.exists()
-                roi_ms = alina_ms = None
+                method_folder = output_folder / video_folder.name / method_name
+                method_folder.mkdir(parents=True, exist_ok=True)
+                gemini_prediction_file = method_folder / f'{image_path.stem}_gemini_{selection_width}x{selection_height}_{options.gemini_model}.json'
+                stored_prediction_file = gemini_prediction_file.with_name(gemini_prediction_file.stem + '_bbox1000_v1' + gemini_prediction_file.suffix)
+                inference_time_file = method_folder / f'{image_path.stem}_gemini_inference_ms.json'
+                used_saved_prediction = method_name == 'gemini' and stored_prediction_file.exists()
+                roi_time_ms = alina_time_ms = None
                 try:
-                    start = time.perf_counter()
-                    quad_small = select_roi(selection, method, args.seed, cache, args.gemini_model)
-                    roi_ms = (time.perf_counter() - start) * 1000
-                    if method == "gemini" and not cache_hit:
-                        timing_file.write_text(json.dumps({"inference_ms": roi_ms}), encoding="utf-8")
-                    quad = np.rint(np.asarray(quad_small, dtype=np.float64) / scale).astype(np.int32)
-                    quad[:, 0] = np.clip(quad[:, 0], 0, img.shape[1] - 1)
-                    quad[:, 1] = np.clip(quad[:, 1], 0, img.shape[0] - 1)
-                    (folder / f"{path.stem}_roi_selection.json").write_text(json.dumps(np.asarray(quad_small).astype(int).tolist(), indent=2), encoding="utf-8")
-                    (folder / f"{path.stem}_roi.json").write_text(json.dumps(quad.tolist(), indent=2), encoding="utf-8")
-                    preview = selection.copy()
-                    cv2.polylines(preview, [np.asarray(quad_small, dtype=np.int32)], True, (0, 0, 255), 2)
-                    cv2.imwrite(str(folder / f"{path.stem}_roi_selection.jpg"), preview)
-                    preview_full = img.copy()
-                    cv2.polylines(preview_full, [quad], True, (0, 0, 255), 3)
-                    cv2.imwrite(str(folder / f"{path.stem}_roi.jpg"), preview_full)
-                    start = time.perf_counter()
-                    annotated, coords, had_lines = process_image(img, alina_roi(quad), config)
-                    alina_ms = (time.perf_counter() - start) * 1000
-                    cv2.imwrite(str(folder / f"{path.stem}_annotated.jpg"), annotated)
-                    np.savetxt(folder / f"{path.stem}_coords.txt", coords, fmt="%d")
-                    row = dict(video=video.name, frame=path.name, method=method, status="ok",
-                               roi_ms=round(roi_ms, 2), alina_ms=round(alina_ms, 2),
-                               total_ms=round(roi_ms + alina_ms, 2),
-                               detected_pixels=len(coords), had_lines=bool(had_lines),
-                               cache_hit=bool(cache_hit), error="")
+                    start_time = time.perf_counter()
+
+                    # Measure how long the method takes to choose its ROI.
+                    selection_corners = select_roi(selection_image, method_name, options.seed, gemini_prediction_file, options.gemini_model)
+                    roi_time_ms = (time.perf_counter() - start_time) * 1000
+                    if method_name == 'gemini' and (not used_saved_prediction):
+                        inference_time_file.write_text(json.dumps({'inference_ms': roi_time_ms}), encoding='utf-8')
+
+                    # Convert the corners back to full-resolution coordinates.
+                    full_size_corners = np.rint(np.asarray(selection_corners, dtype=np.float64) / display_scale).astype(np.int32)
+                    full_size_corners[:, 0] = np.clip(full_size_corners[:, 0], 0, original_image.shape[1] - 1)
+                    full_size_corners[:, 1] = np.clip(full_size_corners[:, 1], 0, original_image.shape[0] - 1)
+                    (method_folder / f'{image_path.stem}_roi_selection.json').write_text(json.dumps(np.asarray(selection_corners).astype(int).tolist(), indent=2), encoding='utf-8')
+                    (method_folder / f'{image_path.stem}_roi.json').write_text(json.dumps(full_size_corners.tolist(), indent=2), encoding='utf-8')
+                    selection_preview = selection_image.copy()
+                    cv2.polylines(selection_preview, [np.asarray(selection_corners, dtype=np.int32)], True, (0, 0, 255), 2)
+                    cv2.imwrite(str(method_folder / f'{image_path.stem}_roi_selection.jpg'), selection_preview)
+                    full_size_preview = original_image.copy()
+                    cv2.polylines(full_size_preview, [full_size_corners], True, (0, 0, 255), 3)
+                    cv2.imwrite(str(method_folder / f'{image_path.stem}_roi.jpg'), full_size_preview)
+                    start_time = time.perf_counter()
+
+                    # Pass the ROI into the original ALINA processing code.
+                    annotated_image, detected_coordinates, found_lines = process_image(original_image, alina_roi(full_size_corners), pipeline_config)
+                    alina_time_ms = (time.perf_counter() - start_time) * 1000
+                    cv2.imwrite(str(method_folder / f'{image_path.stem}_annotated.jpg'), annotated_image)
+                    np.savetxt(method_folder / f'{image_path.stem}_coords.txt', detected_coordinates, fmt='%d')
+                    result_row = dict(video=video_folder.name, frame=image_path.name, method=method_name, status='ok', roi_ms=round(roi_time_ms, 2), alina_ms=round(alina_time_ms, 2), total_ms=round(roi_time_ms + alina_time_ms, 2), detected_pixels=len(detected_coordinates), had_lines=bool(found_lines), cache_hit=bool(used_saved_prediction), error='')
                 except Exception as exc:
-                    row = dict(video=video.name, frame=path.name, method=method, status="failed",
-                               roi_ms="" if roi_ms is None else round(roi_ms, 2),
-                               alina_ms="" if alina_ms is None else round(alina_ms, 2),
-                               total_ms="", detected_pixels="", had_lines="",
-                               cache_hit=bool(cache_hit), error=f"{type(exc).__name__}: {exc}")
-                rows[key] = row
-                save_rows(csv_path, rows)
-                print(f"[{video.name}/{path.name}/{method}] {row['status']} "
-                      f"pixels={row['detected_pixels']} roi_ms={row['roi_ms']} "
-                      f"alina_ms={row['alina_ms']} {row['error']}", flush=True)
+                    result_row = dict(video=video_folder.name, frame=image_path.name, method=method_name, status='failed', roi_ms='' if roi_time_ms is None else round(roi_time_ms, 2), alina_ms='' if alina_time_ms is None else round(alina_time_ms, 2), total_ms='', detected_pixels='', had_lines='', cache_hit=bool(used_saved_prediction), error=f'{type(error).__name__}: {error}')
 
-    print(f"\nFinished. Results: {csv_path.resolve()}")
-    for method in args.methods:
-        selected = [r for r in rows.values() if r["method"] == method]
-        success = sum(r["status"] == "ok" and r["had_lines"] in (True, "True") for r in selected)
-        failed = sum(r["status"] == "failed" for r in selected)
-        print(f"{method}: {len(selected)} evaluated; {success} with lines; {failed} errors")
-    print("Detected pixel count is NOT an accuracy metric. CBEM ground truth is needed for precision/recall/F1.")
-
-
-if __name__ == "__main__":
+                # Keep the newest result for this video, frame, and method.
+                saved_results[result_key] = result_row
+                save_rows(results_csv, saved_results)
+                print(f"[{video_folder.name}/{image_path.name}/{method_name}] {result_row['status']} pixels={result_row['detected_pixels']} roi_ms={result_row['roi_ms']} alina_ms={result_row['alina_ms']} {result_row['error']}", flush=True)
+    print(f'\nFinished. Results: {results_csv.resolve()}')
+    for method_name in options.methods:
+        method_results = [result for result in saved_results.values() if result['method'] == method_name]
+        successful_frames = sum((result['status'] == 'ok' and result['had_lines'] in (True, 'True') for result in method_results))
+        failed_frames = sum((result['status'] == 'failed' for result in method_results))
+        print(f'{method_name}: {len(method_results)} evaluated; {successful_frames} with lines; {failed_frames} errors')
+    print('Detected pixel count is NOT an accuracy metric. CBEM ground truth is needed for precision/recall/F1.')
+if __name__ == '__main__':
     main()

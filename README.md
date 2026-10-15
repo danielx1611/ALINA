@@ -280,3 +280,50 @@ python cli.py superimpose \
 ## Acknowledgement
 
 This work is built with [OpenCV](https://opencv.org/), [NumPy](https://numpy.org/), and [Matplotlib](https://matplotlib.org/), and evaluated on the AssistTaxi dataset [2]. We thank the authors of these projects for making them available to the community.
+
+# Daniel Acosta Fork
+
+## Assignment 4: Automatic ROI selection
+
+This fork includes the work for Machine Learning Engineering Assignment 4. The original ALINA pipeline was left unchanged. The new experiment scripts try five ways to select a trapezoidal region of interest (ROI) automatically: HSV, Canny edges with Hough lines, RANSAC, K-Means, and Google's Gemini model.
+
+Each evaluated frame gets a new ROI, which is then passed into ALINA for line detection. The experiments used three taxiway video folders containing 50 frames each. The four traditional methods processed all 150 frames, while Gemini processed 10 sampled frames per video.
+
+The results compare how often ALINA produces marking annotations, how long each method takes, and how performance changes between videos. A detection means ALINA found at least one marking pixel; it does not necessarily mean all annotations were correct. Some ROIs covered visible yellow markings even when ALINA returned no annotations.
+
+### Added folders
+
+- [`experiments/`](experiments/README.txt) — earlier single-image tests.
+- [`dynamic_experiments/`](dynamic_experiments/README.txt) — main per-frame batch experiments.
+- [`dynamic_experiment_analysis/`](dynamic_experiment_analysis/README.txt) — summary tables and three report graphs.
+
+### Run the assignment experiments
+
+From the repository root, with a Python virtual environment active:
+
+```powershell
+python -m pip install -e .
+python -m pip install scikit-learn google-genai pandas
+python dynamic_experiments/run_dynamic_batch.py --methods hsv hough ransac kmeans
+```
+
+Gemini also needs an API key from Google AI Studio. For PowerShell:
+
+```powershell
+$env:GEMINI_API_KEY = "YOUR_KEY_HERE"
+python dynamic_experiments/run_dynamic_batch.py --methods gemini
+```
+
+The default model in the batch runner is `gemini-flash-lite-latest`. Another available model can be selected with `--gemini-model MODEL_NAME`. Never commit an API key. API availability and usage limits vary.
+
+After running the experiments, create the report graphs with:
+
+```powershell
+python dynamic_experiment_analysis/analyze_dynamic.py
+```
+
+The batch results are stored under `outputs/dynamic_experiments/` and the graphs and tables under `outputs/dynamic_analysis/`. These generated outputs are excluded from Git. The analysis script also has an optional CBEM comparison, but those scores were not used as confirmed accuracy results in this assignment because the ground-truth coordinates did not align reliably with the experimental frames.
+
+See the folder READMEs for individual commands and options.
+
+---

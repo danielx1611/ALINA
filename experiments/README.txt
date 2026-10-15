@@ -1,17 +1,16 @@
-ALINA automatic ROI restart
+ALINA Single-Image ROI Tests
 
-Replace experiments/roi_methods.py and experiments/run_experiments.py with these files.
-Run from ALINA repository root:
+This folder contains earlier tests made while developing the automatic ROI methods. It tests one image at a time. The main assignment results were collected later with dynamic_experiments/run_dynamic_batch.py.
+
+Run these commands from the ALINA project root:
   python experiments/run_experiments.py --methods hsv hough ransac kmeans
   python experiments/run_experiments.py --methods gemini
 
-Selection images are resized using ALINA's own compute_display_scale(max_display_dim=1080).
-ROI points are scaled back to original-resolution coordinates before process_image.
-Gemini receives the resized image and its exact dimensions. No ROI-area cap or
-90,000-pixel connected-component safety check is applied. Invalid coordinates
-are rejected rather than silently clipped. ALINA's original processing remains
-unchanged and may run for a long time with poor ROI selections.
+The default image is data/Raw_Data/vidd_1/00001.jpg. For another image:
+  python experiments/run_experiments.py --image data/Raw_Data/vidd_2/00001.jpg --methods hough
 
-New output directory: outputs/automated_experiments_v2
-Gemini cache includes selection dimensions and model name; old cached full-res
-predictions will not be reused. Do not commit API keys.
+Gemini needs GEMINI_API_KEY in the environment. The default model is gemini-flash-lite-latest, and another available model can be set with --gemini-model.
+
+The input image is resized for ROI selection (maximum dimension 1080 by default). The coordinates are converted back to the original resolution before ALINA runs. Results go to outputs/automated_experiments_v2/ unless you set --output-dir.
+
+These early previews are useful for checking individual ROI predictions and ALINA results, but use dynamic_experiments/ for the main frame-by-frame results.
