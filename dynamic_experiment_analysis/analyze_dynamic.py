@@ -1,5 +1,5 @@
 """Analyze dynamic ALINA ROI experiments without modifying or rerunning ALINA.
-Run from repository root: python analysis/analyze_dynamic.py
+Run from repository root: python dynamic_experiment_analysis/analyze_dynamic.py
 Requires: pandas, numpy, matplotlib (pip install pandas matplotlib).
 """
 from __future__ import annotations
