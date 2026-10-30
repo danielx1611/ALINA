@@ -70,7 +70,7 @@ python color_experiments/run_end_to_end.py --frames-per-video 5 --methods kmeans
 
 The script uses the saved ROI for each video, generates the color mask, removes predictions outside the transformed ROI, and runs ALINA's histogram and CIRCLEDAT stages. The 100,000-pixel component limit prevents very large regions from causing long traversal times. A `skipped_excessive` result means the limit was reached and traversal was skipped. A `no_peak` result means ALINA did not accept a starting point. An `ok` result means traversal ran, but it can still produce zero final pixels.
 
-The end-to-end detection rate is the share of frames with nonempty output after these checks. It does **not** tell us whether the detected pixels match the actual painted lines. The script also saves mask coverage and timing measurements. Results are written to `results.csv` and `summary.csv` in each selected output folder, along with masks and annotated frames. The script can generate sampled-frame MP4 files locally, but no videos are included in the committed evidence.
+The end-to-end detection rate is the share of frames with nonempty output after these checks. It does **not** tell us whether the detected pixels match the actual painted lines. The script also saves mask coverage and timing measurements. Results are written to `results.csv` and `summary.csv` in each selected output folder, along with masks and annotated frames. 
 
 Use `--output` to choose a results folder. Runs with different settings should use different folders, since the script checks its saved settings before resuming.
 

@@ -349,4 +349,4 @@ python color_experiments/run_end_to_end.py --frames-per-video 5 --methods baseli
 python color_experiments/run_end_to_end.py --frames-per-video 5 --methods kmeans gmm random_forest adaptive_kmeans --max-component-pixels 100000 --output outputs/color_experiments/end_to_end_remaining
 ```
 
-The [saved results](color_experiments/results/) include per-frame pixel scores, summary tables, three comparison graphs, and end-to-end summaries. The original annotations, trained models, and full image outputs are not committed. Reproducing the exact scores requires the final manually labeled frames and ROI selections; the README explains how those were prepared. No demonstration videos are included in the repository.
+The [saved results](color_experiments/results/) include per-frame pixel scores, summary tables, three comparison graphs, and end-to-end summaries. The original annotations, trained models, and full image outputs are not committed. Reproducing the exact scores requires the final manually labeled frames and ROI selections; the README explains how those were prepared.
