@@ -330,26 +330,23 @@ See the folder READMEs for individual commands and options.
 
 ## Assignment 5: ML-based color thresholding
 
-This fork also includes Assignment 5 experiments that compare five learned or data-driven color-mask methods (K-Means, GMM, Random Forest, Linear SVM, and adaptive K-Means) against the original fixed HSV threshold. The core ALINA pipeline remains unchanged; the experimental driver supplies each method's mask to the histogram and CIRCLEDAT stages.
+For Assignment 5, I compared five ways of finding yellow and white taxiway markings without using ALINA's fixed color threshold: K-Means, Gaussian Mixture Models, Random Forest, Linear SVM, and adaptive K-Means. I also ran the original HSV threshold as a baseline. The experiments use ALINA's existing histogram and CIRCLEDAT stages, without changing the normal labeling command.
 
-**Full reproduction instructions:** [`color_experiments/README.md`](color_experiments/README.md). This covers annotation, training, pixel-level evaluation, end-to-end experiments, saved outputs, and demonstration videos.
+The code and step-by-step instructions are in [`color_experiments/`](color_experiments/README.md). The folder covers drawing training labels, fitting the models, comparing their masks, and running the full ALINA evaluation.
 
-From the repository root, with the virtual environment active and `data/Raw_Data/vidd_1`, `vidd_2`, `vidd_3` available:
+From the repository root, after installing the dependencies described in that README and preparing the frames and annotations:
 
 ```powershell
-python -m pip install -e .
-python -m pip install scikit-learn joblib pandas matplotlib
-python color_experiments/annotate.py
 python color_experiments/train_models.py
 python color_experiments/evaluate.py
 python color_experiments/analyze_results.py
 ```
 
-To reproduce the full-pipeline comparisons on five evenly spaced frames per video:
+To repeat the end-to-end comparison on five frames from each video:
 
 ```powershell
 python color_experiments/run_end_to_end.py --frames-per-video 5 --methods baseline svm --max-component-pixels 100000 --output outputs/color_experiments/end_to_end_roi_fixed
 python color_experiments/run_end_to_end.py --frames-per-video 5 --methods kmeans gmm random_forest adaptive_kmeans --max-component-pixels 100000 --output outputs/color_experiments/end_to_end_remaining
 ```
 
-The final annotated train/test split was adjusted to include the available white-marking example in training. To reproduce the exact reported results, use the saved annotations, ROI files, and final split rather than generating a new split. Generated results are under `outputs/color_experiments/` and may not be tracked by Git; see the experiment README for evidence paths and metric definitions. The assignment report contains the results and discussion separately.
+The [saved results](color_experiments/results/) include per-frame pixel scores, summary tables, three comparison graphs, and end-to-end summaries. The original annotations, trained models, and full image outputs are not committed. Reproducing the exact scores requires the final manually labeled frames and ROI selections; the README explains how those were prepared. No demonstration videos are included in the repository.
