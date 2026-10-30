@@ -327,3 +327,29 @@ The batch results are stored under `outputs/dynamic_experiments/` and the graphs
 See the folder READMEs for individual commands and options.
 
 ---
+
+## Assignment 5: ML-based color thresholding
+
+This fork also includes Assignment 5 experiments that compare five learned or data-driven color-mask methods (K-Means, GMM, Random Forest, Linear SVM, and adaptive K-Means) against the original fixed HSV threshold. The core ALINA pipeline remains unchanged; the experimental driver supplies each method's mask to the histogram and CIRCLEDAT stages.
+
+**Full reproduction instructions:** [`color_experiments/README.md`](color_experiments/README.md). This covers annotation, training, pixel-level evaluation, end-to-end experiments, saved outputs, and demonstration videos.
+
+From the repository root, with the virtual environment active and `data/Raw_Data/vidd_1`, `vidd_2`, `vidd_3` available:
+
+```powershell
+python -m pip install -e .
+python -m pip install scikit-learn joblib pandas matplotlib
+python color_experiments/annotate.py
+python color_experiments/train_models.py
+python color_experiments/evaluate.py
+python color_experiments/analyze_results.py
+```
+
+To reproduce the full-pipeline comparisons on five evenly spaced frames per video:
+
+```powershell
+python color_experiments/run_end_to_end.py --frames-per-video 5 --methods baseline svm --max-component-pixels 100000 --output outputs/color_experiments/end_to_end_roi_fixed
+python color_experiments/run_end_to_end.py --frames-per-video 5 --methods kmeans gmm random_forest adaptive_kmeans --max-component-pixels 100000 --output outputs/color_experiments/end_to_end_remaining
+```
+
+The final annotated train/test split was adjusted to include the available white-marking example in training. To reproduce the exact reported results, use the saved annotations, ROI files, and final split rather than generating a new split. Generated results are under `outputs/color_experiments/` and may not be tracked by Git; see the experiment README for evidence paths and metric definitions. The assignment report contains the results and discussion separately.
